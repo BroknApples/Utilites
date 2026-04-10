@@ -16,13 +16,24 @@ setlocal enabledelayedexpansion
 :: 1. Handle Admin Elevation
 net session >nul 2>&1
 if %errorLevel% neq 0 (
-    powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
-    exit /b
+  powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  exit /b
 )
 
+:: Set the drive variable first
 set "usb_drive=%~d0"
 
-:: 2. Identify locking processes (Strictly ignore Explorer)
+:: 2. Safety Check: Verify if the drive is actually removable (DriveType 2)
+for /f "tokens=2 delims==" %%a in ('wmic logicaldisk where "DeviceID='%usb_drive%'" get DriveType /value ^| find "DriveType"') do set "type=%%a"
+
+if not "%type%"=="2" (
+  echo ERROR: This script is running from drive %usb_drive% (Type %type%^).
+  echo It can only be run from a removable USB drive to prevent system instability.
+  pause
+  exit /b
+)
+
+:: 3. Identify locking processes (Strictly ignore Explorer)
 echo Scanning %usb_drive% for active locks...
 set "proc_list="
 for /f "delims=" %%i in ('powershell -NoProfile -Command ^
@@ -30,7 +41,7 @@ for /f "delims=" %%i in ('powershell -NoProfile -Command ^
     set "proc_list=%%i"
 )
 
-:: 3. Show Warning Box if other processes are found
+:: 4. Show Warning Box if other processes are found
 if not "%proc_list%"=="" (
     :: Create a simpler VBScript that won't trigger 'Object Required' errors
     echo MsgBox "The following apps are using your USB and will be closed:" ^& vbCrLf ^& "%proc_list%" ^& vbCrLf ^& "Explorer will be ignored.", 48, "USB Force Eject" > "%temp%\msg.vbs"
@@ -38,7 +49,7 @@ if not "%proc_list%"=="" (
     del "%temp%\msg.vbs"
 )
 
-:: 4. Create the Worker Script on your local C: drive
+:: 5. Create the Worker Script on your local C: drive
 set "temp_script=%temp%\usb_final_fix.bat"
 (
 echo @echo off
@@ -51,7 +62,7 @@ if not "%proc_list%"=="" (
     )
 )
 
-:: 5. The "Nuclear" Dismount (Essential for UAS devices)
+:: 6. The "Nuclear" Dismount (Essential for UAS devices)
 :: This forces the drive to 'reboot' its connection
 echo echo select volume %usb_drive:~0,1% ^> "%temp%\dp.txt"
 echo echo offline disk ^>^> "%temp%\dp.txt"
@@ -66,6 +77,6 @@ echo del "%temp%\dp.txt"
 echo start /b "" cmd /c del "%%~f0" ^& exit
 ) > "%temp_script%"
 
-:: 6. Launch the worker and close the USB file instantly
+:: 7 Launch the worker and close the USB file instantly
 start "" "%temp_script%"
 exit
