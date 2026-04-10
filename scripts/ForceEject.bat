@@ -13,27 +13,44 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: 1. Handle Admin Elevation
+
+:: 1. Admin Elevation
 net session >nul 2>&1
 if %errorLevel% neq 0 (
   powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
   exit /b
 )
 
-:: Set the drive variable first
+
+:: Set the drive variable
 set "usb_drive=%~d0"
 
-:: 2. Safety Check: Verify if the drive is actually removable (DriveType 2)
-for /f "tokens=2 delims==" %%a in ('wmic logicaldisk where "DeviceID='%usb_drive%'" get DriveType /value ^| find "DriveType"') do set "type=%%a"
 
-if not "%type%"=="2" (
-  echo ERROR: This script is running from drive %usb_drive% (Type %type%^).
-  echo It can only be run from a removable USB drive to prevent system instability.
+:: 2. Safety Check: Block C: drive and verify removable/USB status
+set "drive_letter=%usb_drive:~0,1%"
+
+:: Explicitly block the system drive
+if /i "%drive_letter%"=="C" (
+  echo ERROR: This script cannot be run on the C: drive.
   pause
   exit /b
 )
 
-:: 3. Identify locking processes (Strictly ignore Explorer)
+for /f %%a in ('powershell -NoProfile -Command "$d = '%drive_letter%'; (Get-Volume -DriveLetter $d).DriveType"') do set "drive_type=%%a"
+for /f %%a in ('powershell -NoProfile -Command "$d = '%drive_letter%'; (Get-Partition -DriveLetter $d | Get-Disk).BusType"') do set "bus_type=%%a"
+
+set "is_safe=0"
+if /i "%drive_type%"=="Removable" set "is_safe=1"
+if /i "%bus_type%"=="USB" set "is_safe=1"
+
+if "%is_safe%"=="0" (
+  echo ERROR: Drive %usb_drive% is not a USB or Removable device (%bus_type%/%drive_type%^).
+  pause
+  exit /b
+)
+
+
+:: 3. Identify locking processes
 echo Scanning %usb_drive% for active locks...
 set "proc_list="
 for /f "delims=" %%i in ('powershell -NoProfile -Command ^
@@ -41,13 +58,16 @@ for /f "delims=" %%i in ('powershell -NoProfile -Command ^
     set "proc_list=%%i"
 )
 
-:: 4. Show Warning Box if other processes are found
+
+
+:: 4. Show a warning if other processes are found
 if not "%proc_list%"=="" (
     :: Create a simpler VBScript that won't trigger 'Object Required' errors
     echo MsgBox "The following apps are using your USB and will be closed:" ^& vbCrLf ^& "%proc_list%" ^& vbCrLf ^& "Explorer will be ignored.", 48, "USB Force Eject" > "%temp%\msg.vbs"
     wscript "%temp%\msg.vbs"
     del "%temp%\msg.vbs"
 )
+
 
 :: 5. Create the Worker Script on your local C: drive
 set "temp_script=%temp%\usb_final_fix.bat"
@@ -62,7 +82,8 @@ if not "%proc_list%"=="" (
     )
 )
 
-:: 6. The "Nuclear" Dismount (Essential for UAS devices)
+
+:: 6. Dismount
 :: This forces the drive to 'reboot' its connection
 echo echo select volume %usb_drive:~0,1% ^> "%temp%\dp.txt"
 echo echo offline disk ^>^> "%temp%\dp.txt"
@@ -76,6 +97,7 @@ echo timeout /t 3 ^>nul
 echo del "%temp%\dp.txt"
 echo start /b "" cmd /c del "%%~f0" ^& exit
 ) > "%temp_script%"
+
 
 :: 7 Launch the worker and close the USB file instantly
 start "" "%temp_script%"
